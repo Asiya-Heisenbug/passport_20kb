@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AI Passport Photo Processor</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --text: #f8fafc;
+      --subtext: #94a3b8;
+    }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    .grid-uploads {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .upload-box {
+      border: 2px dashed #475569;
+      border-radius: 12px;
+      padding: 2.5rem 1.5rem;
+      text-align: center;
+      background: var(--card);
+      cursor: pointer;
+      transition: border 0.2s, background 0.2s;
+    }
+    .upload-box:hover {
+      border-color: var(--accent);
+      background: #26334d;
+    }
+    .upload-box h3 {
+      margin-top: 0;
+      margin-bottom: 0.5rem;
+    }
+    .upload-box p {
+      color: var(--subtext);
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+    }
+    .preview-section {
+      display: grid;
+      grid-template-columns: 1fr 1fr 300px;
+      gap: 1.5rem;
+      margin-top: 1rem;
+    }
+    .card {
+      background: var(--card);
+      padding: 1.25rem;
+      border-radius: 8px;
+    }
+    .card h3 {
+      margin-top: 0;
+    }
+    canvas {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+    }
+    .checklist {
+      list-style: none;
+      padding: 0;
+    }
+    .checklist li {
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .check { color: var(--success); }
+    .warn-badge {
+      background: rgba(245, 158, 11, 0.2);
+      border: 1px solid var(--warning);
+      color: var(--warning);
+      padding: 0.75rem;
+      border-radius: 6px;
+      margin-top: 1rem;
+    }
+    .btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 0.75rem 1.25rem;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 0.5rem;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-text {
+      margin-top: 0.75rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>AI Passport Photo Processor</h1>
+
+  <!-- Upload Section (Single & Batch side by side) -->
+  <div class="grid-uploads">
+    <!-- Single Photo Drop Zone -->
+    <div class="upload-box" id="singleDropZone" onclick="document.getElementById('fileInput').click()">
+      <h3>🖼️ Single Photo Processing</h3>
+      <p>Drag & drop or click to crop, validate, and inspect one photo.</p>
+      <input type="file" id="fileInput" accept="image/*" style="display:none" onchange="handleUpload(this.files[0])">
+      <button class="btn">Select Photo</button>
+    </div>
+
+    <!-- Batch Folder ZIP Upload -->
+    <div class="upload-box" id="zipDropZone" onclick="document.getElementById('zipFileInput').click()">
+      <h3>📦 Bulk Folder Processing (.ZIP)</h3>
+      <p>Upload a .zip file of photos to process all of them automatically.</p>
+      <input type="file" id="zipFileInput" accept=".zip" style="display:none" onchange="handleZipUpload(this.files[0])">
+      <button class="btn">Upload ZIP Folder</button>
+      <div id="batchStatus" class="status-text"></div>
+    </div>
+  </div>
+
+  <div id="warningBox" class="warn-badge" style="display:none;"></div>
+
+  <!-- Workspace for Single File Interactive Editing & Validations -->
+  <div class="preview-section" id="workspace" style="display:none;">
+    <!-- Original + BBox Canvas -->
+    <div class="card">
+      <h3>1. Original Photo (Detected Crop)</h3>
+      <canvas id="sourceCanvas"></canvas>
+    </div>
+
+    <!-- Final Result Preview -->
+    <div class="card">
+      <h3>2. Passport Result Preview</h3>
+      <img id="outputPreview" style="max-width: 100%; border-radius: 4px;" alt="Passport Output"/>
+    </div>
+
+    <!-- Validation Sidebar -->
+    <div class="card">
+      <h3>Validations</h3>
+      <ul class="checklist" id="checklist">
+        <li><span class="check">✓</span> Head visible</li>
+        <li><span class="check">✓</span> Face visible</li>
+        <li><span class="check">✓</span> Neck visible</li>
+        <li><span class="check">✓</span> Both shoulders visible</li>
+        <li><span class="check">✓</span> Correct 35x45 framing</li>
+        <li><span class="check">✓</span> Target: 413x531 px</li>
+        <li id="fileSizeItem"><span class="check">✓</span> File size ≤ 20 KB</li>
+      </ul>
+
+      <button class="btn" id="downloadBtn" onclick="downloadImage()">Download Photo</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let rawFile = null;
+  let currentBbox = null;
+  let imgElement = new Image();
+
+  // --- Single Photo Handler ---
+  async function handleUpload(file) {
+    if (!file) return;
+    rawFile = file;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch('/api/process', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (!data.success) {
+        alert(data.warning || "Processing failed");
+        return;
+      }
+
+      document.getElementById('workspace').style.display = 'grid';
+      
+      const warnBox = document.getElementById('warningBox');
+      if (data.warning) {
+        warnBox.innerText = '⚠️ ' + data.warning;
+        warnBox.style.display = 'block';
+      } else {
+        warnBox.style.display = 'none';
+      }
+
+      currentBbox = data.crop_bbox;
+      
+      imgElement.src = URL.createObjectURL(file);
+      imgElement.onload = () => {
+        renderSourceCanvas();
+        updateOutputPreview();
+      };
+    } catch (e) {
+      alert("Error processing photo: " + e.message);
+    }
+  }
+
+  function renderSourceCanvas() {
+    const canvas = document.getElementById('sourceCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = imgElement.width;
+    canvas.height = imgElement.height;
+
+    ctx.drawImage(imgElement, 0, 0);
+
+    // Render bounding box
+    ctx.strokeStyle = '#3b82f6';
+    ctx.lineWidth = Math.max(2, imgElement.width / 200);
+    ctx.strokeRect(currentBbox.x, currentBbox.y, currentBbox.w, currentBbox.h);
+  }
+
+  async function updateOutputPreview() {
+    const formData = new FormData();
+    formData.append('file', rawFile);
+    formData.append('x', currentBbox.x);
+    formData.append('y', currentBbox.y);
+    formData.append('w', currentBbox.w);
+    formData.append('h', currentBbox.h);
+
+    const response = await fetch('/api/render-crop', { method: 'POST', body: formData });
+    const blob = await response.blob();
+    const sizeKb = response.headers.get('X-File-Size-KB');
+
+    document.getElementById('outputPreview').src = URL.createObjectURL(blob);
+    document.getElementById('fileSizeItem').innerHTML = `<span class="check">✓</span> File size: ${sizeKb} KB`;
+  }
+
+  async function downloadImage() {
+    const formData = new FormData();
+    formData.append('file', rawFile);
+    formData.append('x', currentBbox.x);
+    formData.append('y', currentBbox.y);
+    formData.append('w', currentBbox.w);
+    formData.append('h', currentBbox.h);
+
+    const response = await fetch('/api/render-crop', { method: 'POST', body: formData });
+    const blob = await response.blob();
+    
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'passport_photo.jpg';
+    a.click();
+  }
+
+  // --- Batch ZIP Folder Handler ---
+  async function handleZipUpload(file) {
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.zip')) {
+      alert("Please upload a .zip file containing your images.");
+      return;
+    }
+
+    const statusDiv = document.getElementById('batchStatus');
+    statusDiv.innerText = "⏳ Processing batch photos... Please wait.";
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch('/api/process-batch', { method: 'POST', body: formData });
+
+      if (!response.ok) {
+        const err = await response.json();
+        alert(err.detail || "Batch processing failed.");
+        statusDiv.innerText = "";
+        return;
+      }
+
+      const blob = await response.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'passport_photos_processed.zip';
+      a.click();
+
+      statusDiv.innerText = "✓ Batch complete! Check downloads.";
+    } catch (e) {
+      alert("Error uploading ZIP: " + e.message);
+      statusDiv.innerText = "";
+    }
+  }
+</script>
+</body>
+</html>
